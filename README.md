@@ -1,6 +1,6 @@
 # PropTrack — Real Estate Listing & Transaction Management System
 
-Full-stack web application built for INFSCI 2710 (Spring 2026).  
+Full-stack web application.  
 Connects to a MySQL 8 database hosted on the class server.
 
 ---
