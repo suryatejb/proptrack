@@ -1,7 +1,8 @@
 const router = require('express').Router();
 const pool = require('../db');
 
-// GET offers for a listing
+// fetch all offers on a specific listing, joined with buyer name/email
+// so the listing detail page doesn't need a second round-trip to look up the buyer
 router.get('/listing/:listing_id', async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -46,44 +47,35 @@ router.post('/', async (req, res) => {
   }
 });
 
-// POST accept an offer — transaction: insert accepted offer + update listing status
+// accept an offer — this hits the stored procedure instead of doing the transaction
+// inline because the ROLLBACK logic needs to live in one place. if the listing
+// isn't active anymore the procedure rolls everything back and signals a 45000 error
 router.post('/accept', async (req, res) => {
   const { listing_id, buyer_id, offer_price, contingencies, expiration_date } = req.body;
   if (!listing_id || !buyer_id || !offer_price) {
     return res.status(400).json({ error: 'listing_id, buyer_id, and offer_price are required' });
   }
 
-  const conn = await pool.getConnection();
   try {
-    await conn.beginTransaction();
-
-    const [offerResult] = await conn.query(
-      'INSERT INTO offer (listing_id, buyer_id, offer_price, contingencies, expiration_date, status) VALUES (?, ?, ?, ?, ?, ?)',
-      [listing_id, buyer_id, offer_price, contingencies || null, expiration_date || null, 'accepted']
+    const [resultSets] = await pool.query(
+      'CALL accept_offer(?, ?, ?, ?, ?)',
+      [listing_id, buyer_id, offer_price, contingencies || null, expiration_date || null]
     );
 
-    const [updateResult] = await conn.query(
-      "UPDATE listing SET status = 'under_contract' WHERE listing_id = ? AND status = 'active'",
-      [listing_id]
-    );
-
-    // if the listing wasn't active, roll back — we can't accept an offer on it
-    if (updateResult.affectedRows === 0) {
-      await conn.rollback();
-      return res.status(409).json({ error: 'Listing is not active — offer cannot be accepted' });
-    }
-
-    await conn.commit();
-    res.status(201).json({ offer_id: offerResult.insertId });
+    const offerId = resultSets?.[0]?.[0]?.offer_id || null;
+    res.status(201).json({ offer_id: offerId });
   } catch (err) {
-    await conn.rollback();
+    if (err.code === 'ER_SP_DOES_NOT_EXIST') {
+      return res.status(500).json({ error: 'Database procedure accept_offer is missing. Re-import sql/schema.sql to apply the latest transaction definition.' });
+    }
+    if (err.sqlState === '45000') {
+      return res.status(409).json({ error: err.message });
+    }
     res.status(500).json({ error: err.message });
-  } finally {
-    conn.release();
   }
 });
 
-// PUT update offer status
+// update just the status field — used when manually rejecting or marking expired
 router.put('/:id', async (req, res) => {
   const { status } = req.body;
   const allowed = ['pending', 'accepted', 'rejected', 'expired', 'withdrawn'];

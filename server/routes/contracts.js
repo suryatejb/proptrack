@@ -1,7 +1,8 @@
 const router = require('express').Router();
 const pool = require('../db');
 
-// GET all contracts
+// join through listing → property and offer → buyer to get human-readable names
+// listing_id lives directly on contract so we avoid an extra join through offer for address lookups
 router.get('/', async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -32,7 +33,8 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// POST
+// create a contract — offer_id has a UNIQUE constraint so mysql will throw ER_DUP_ENTRY
+// if someone tries to create a second contract for the same offer; catch that as a 409
 router.post('/', async (req, res) => {
   const { offer_id, listing_id, closing_date, final_price, earnest_money, contract_date } = req.body;
   if (!offer_id || !listing_id || !final_price || !contract_date) {
@@ -50,7 +52,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT
+// update contract details — mainly used to set closing_date and flip status to closed
 router.put('/:id', async (req, res) => {
   const { closing_date, final_price, earnest_money, status } = req.body;
   try {

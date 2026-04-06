@@ -1,7 +1,9 @@
 const router = require('express').Router();
 const pool = require('../db');
 
-// GET all with filters: status, agent_id, min_price, max_price, neighborhood_id, bedrooms
+// GET all listings — supports optional filters passed as query params
+// building the WHERE clause dynamically; WHERE 1=1 is a handy trick so every
+// additional filter can just append AND without checking if it's the first one
 router.get('/', async (req, res) => {
   try {
     let sql = `
@@ -11,7 +13,7 @@ router.get('/', async (req, res) => {
              CONCAT(a.first_name, ' ', a.last_name) AS agent_name, a.email AS agent_email
       FROM listing l
       JOIN property p     ON l.property_id     = p.property_id
-      LEFT JOIN neighborhood n ON p.neighborhood_id = n.neighborhood_id
+      LEFT JOIN neighborhood n ON p.neighborhood_id = n.neighborhood_id  -- LEFT because neighborhood_id is nullable
       JOIN agent a        ON l.agent_id        = a.agent_id
       WHERE 1=1
     `;
@@ -50,7 +52,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET by id
+// get a single listing with all the joined info the detail page needs
 router.get('/:id', async (req, res) => {
   try {
     const [rows] = await pool.query(

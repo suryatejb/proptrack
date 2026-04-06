@@ -321,19 +321,49 @@ GROUP BY a.agent_id, a.first_name, a.last_name, a.brokerage;
 
 
 -- transaction: accepting an offer
--- both the offer insert and the listing status update need to happen together
--- if one fails we don't want a half-updated state
+-- scenario: a buyer submits an accepted offer on a listing.
+-- both the offer record and the listing status update must succeed together.
+-- if the listing is no longer active (already under contract or sold),
+-- the offer insert is rolled back so we never record an accepted offer
+-- against a listing that wasn't available.
 
-START TRANSACTION;
+DROP PROCEDURE IF EXISTS accept_offer;
 
-INSERT INTO offer (listing_id, buyer_id, offer_price, contingencies, expiration_date, status, submitted_at)
-VALUES (1, 2, 287000.00, 'Financing contingency', '2026-04-10', 'accepted', NOW());
+DELIMITER $$
 
-SET @new_offer_id = LAST_INSERT_ID();
+CREATE PROCEDURE accept_offer(
+    IN p_listing_id      INT,
+    IN p_buyer_id        INT,
+    IN p_offer_price     DECIMAL(12,2),
+    IN p_contingencies   TEXT,
+    IN p_expiration_date DATE
+)
+BEGIN
+    DECLARE rows_updated INT DEFAULT 0;
 
-UPDATE listing
-SET status = 'under_contract'
-WHERE listing_id = 1 AND status = 'active';
+    -- start the atomic unit
+    START TRANSACTION;
 
--- in the app we check ROW_COUNT() here and ROLLBACK if 0 rows updated
-COMMIT;
+    -- step 1: insert the accepted offer
+    INSERT INTO offer (listing_id, buyer_id, offer_price, contingencies, expiration_date, status, submitted_at)
+    VALUES (p_listing_id, p_buyer_id, p_offer_price, p_contingencies, p_expiration_date, 'accepted', NOW());
+
+    -- step 2: flip the listing to under_contract only if it is still active
+    UPDATE listing
+    SET status = 'under_contract'
+    WHERE listing_id = p_listing_id AND status = 'active';
+
+    SET rows_updated = ROW_COUNT();
+
+    -- step 3: if the listing was not active, roll back both changes
+    IF rows_updated = 0 THEN
+        ROLLBACK;
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Listing is not active — offer rejected and transaction rolled back.';
+    ELSE
+        COMMIT;
+        SELECT LAST_INSERT_ID() AS offer_id;
+    END IF;
+END$$
+
+DELIMITER ;

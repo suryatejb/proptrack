@@ -31,7 +31,8 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET by id (with amenities)
+// get a single property plus its amenities — two queries because a LEFT JOIN would
+// duplicate the property row for each amenity, which is messier to parse on the frontend
 router.get('/:id', async (req, res) => {
   try {
     const [rows] = await pool.query(
